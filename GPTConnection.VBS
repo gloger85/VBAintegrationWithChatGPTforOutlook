@@ -1,6 +1,6 @@
 Option Explicit
 
-Private Const OPENAI_API_KEY As String = "apikeyA"
+Private Const OPENAI_API_KEY As String = "APIkey"
 Public Const LOG_FILE_PATH As String = "C:\OutlookGPT\log.txt"
 
 
@@ -18,6 +18,188 @@ Public Sub WriteLog(msg As String)
     ts.WriteLine Format(Now, "yyyy-mm-dd HH:nn:ss") & " - " & msg
     ts.Close
 End Sub
+Sub OtworzZaznaczonyMailDoEdycji()
+
+    
+    Dim objMail As MailItem
+    Dim objReply As MailItem
+
+    ' Sprawdzenie, czy jest zaznaczony jakiś element
+    If Application.ActiveExplorer.Selection.Count = 0 Then
+        MsgBox "Proszę zaznaczyć wiadomość e-mail.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Pobranie pierwszego zaznaczonego maila
+    Set objMail = Application.ActiveExplorer.Selection(1)
+
+    ' Sprawdzenie, czy zaznaczony element jest wiadomością e-mail
+    If TypeName(objMail) <> "MailItem" Then
+        MsgBox "Zaznaczony element nie jest wiadomością e-mail.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Utworzenie odpowiedzi
+    Set objReply = objMail.Reply
+
+    ' Wklejenie tekstu na początku wiadomości
+    objReply.HTMLBody = "Hi,<br><br>" & _
+"ich freue mich Ihnen mitteilen zu können, dass Ihr AllData-Konto freigeschaltet worden ist. Unten finden Sie Ihre Anmeldedaten:<br><br>" & _
+"Benutzername:<br>" & _
+"Password:                         changeme (bei erster Anmeldung wird aufgefordert, es auf ein eigenes Passwort zu ändern)<br><br>" & _
+"Bitte prüfen und kurz bestätigen, ob alles zugreifbar ist. Danke!<br><br>" & _
+"Am 1. Februar 2024 wurden die Alldata-Passwörter nach den neuen, globalen Passwortvorgaben geändert.<br><br>" & _
+"Folgende Parameter ändern sich im Vergleich zur bisherigen Passwortvorgabe:<br><br>" & _
+"- Änderung der Passwortlänge von 8 auf 12 Ziffern<br>" & _
+"- Keine Verwendung der letzten 12 Passwörter <br><br>" & _
+"Ablauf:<br>" & _
+"- Am 31. Januar ab 20:00 Uhr wurden alle Alldata-Passwörter von der IT-Abteilung auf 'abgelaufen' gesetzt.<br>" & _
+"- Wenn Alldata am 1. Februar startet, werden Sie aufgefordert, ein neues Passwort einzugeben.<br>" & _
+"- Bitte beachten Sie bei der Vergabe, dass das neue Passwort 12-stellig und alphanumerisch sein muss<br>" & _
+"- Gültige Zeichen für das Passwort sind: A-Z, Groß-/Kleinbuchstaben, 0-9 und die Sonderzeichen #, $, der Unterstrich (_) und §<br><br>" & _
+"Viele Grüsse/Best regards/Pozdrawiam <br><br> " & objReply.HTMLBody
+
+    ' Otwarcie okna odpowiedzi
+    objReply.Display
+
+
+End Sub
+Sub TranslateEmail()
+
+    Dim item As Outlook.MailItem
+    Dim bodyToUse As String, lang As String, translated As String
+    Dim userChoice As VbMsgBoxResult
+    Dim filePath As String, fNum As Integer
+    Dim sel As Selection
+    Dim ns As Outlook.NameSpace
+    Dim draftFolder As Outlook.Folder
+    Dim i As Long
+
+    On Error GoTo ErrHandler
+
+    WriteLog "== Manual processing triggered =="
+
+    Set sel = Application.ActiveExplorer.Selection
+    Set ns = Application.GetNamespace("MAPI")
+    Set draftFolder = ns.GetDefaultFolder(olFolderDrafts)
+
+    ' --- Spróbuj pobrać zaznaczone maile ---
+    If sel.Count > 0 Then
+        For i = 1 To sel.Count
+            If TypeName(sel.item(i)) = "MailItem" Then
+                Set item = sel.item(i)
+                Exit For
+            End If
+        Next i
+    End If
+
+    ' --- Jeśli brak zaznaczenia, pobierz pierwszy mail z Drafts ---
+    If item Is Nothing Then
+        If draftFolder.Items.Count = 0 Then
+            MsgBox "Brak maili do przetworzenia (ani w zaznaczeniu, ani w Drafts).", vbExclamation
+            Exit Sub
+        End If
+
+        ' Znajdź pierwszy element typu MailItem
+        For i = 1 To draftFolder.Items.Count
+            If TypeName(draftFolder.Items(i)) = "MailItem" Then
+                Set item = draftFolder.Items(i)
+                Exit For
+            End If
+        Next i
+
+        If item Is Nothing Then
+            MsgBox "Brak maili typu MailItem w folderze Drafts.", vbExclamation
+            Exit Sub
+        End If
+    End If
+
+    WriteLog "Mail selected: " & item.Subject & " From: " & item.SenderName
+
+    ' --- Pobranie treści wiadomości ---
+    If Len(item.HTMLBody) > 0 Then
+        bodyToUse = item.HTMLBody
+    ElseIf Len(item.Body) > 0 Then
+        bodyToUse = item.Body
+    ElseIf Len(item.RTFBody) > 0 Then
+        bodyToUse = item.RTFBody
+    Else
+        bodyToUse = ""
+    End If
+
+    WriteLog "Body length: " & Len(bodyToUse)
+    WriteLog "Body preview: " & Left(StripHTML(bodyToUse), 200)
+
+    If Len(Trim(bodyToUse)) = 0 Then
+        MsgBox "Brak treści wiadomości — przerwano.", vbExclamation
+        WriteLog "Empty body — abort."
+        Exit Sub
+    End If
+
+    ' --- Detekcja języka ---
+    lang = DetectLanguage(Left(bodyToUse, 1500))
+    WriteLog "Detected language: " & lang
+
+    ' --- Tłumaczenie jeśli wymagane ---
+    If lang <> "pl" And lang <> "en" And lang <> "" And lang <> "other" Then
+        WriteLog "Starting translation..."
+        translated = TranslateText(bodyToUse)
+
+        If Len(translated) > 0 Then
+
+            userChoice = MsgBox("Wybierz działanie dla tłumaczenia:" & vbCrLf & _
+                                "Yes - Zapisz jako plik" & vbCrLf & _
+                                "No - Dołącz pod oryginałem" & vbCrLf & _
+                                "Cancel - Wyświetl w oknie", _
+                                vbYesNoCancel + vbQuestion, "Opcje tłumaczenia")
+
+            Select Case userChoice
+                Case vbYes
+                    filePath = Environ("USERPROFILE") & "\Desktop\" & _
+                               "Tlumaczenie_" & Replace(item.Subject, " ", "_") & ".txt"
+                    fNum = FreeFile
+                    Open filePath For Output As #fNum
+                    Print #fNum, StripHTML(translated)
+                    Close #fNum
+                    MsgBox "Tłumaczenie zapisano: " & filePath, vbInformation
+                    WriteLog "Translation saved to file: " & filePath
+
+                Case vbNo
+                    item.HTMLBody = item.HTMLBody & _
+                        "<hr><p><b>Tłumaczenie:</b></p>" & translated
+                    item.Save
+                    MsgBox "Tłumaczenie dołączone do wiadomości.", vbInformation
+                    WriteLog "Translation appended."
+
+                Case vbCancel
+                    MsgBox StripHTML(translated), vbInformation, _
+                           "Tłumaczenie: " & item.Subject
+                    WriteLog "Translation displayed."
+            End Select
+
+        Else
+            WriteLog "Translation empty."
+        End If
+    Else
+        WriteLog "No translation required (pl/en/other)."
+    End If
+
+    WriteLog "== Manual processing finished =="
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Błąd: " & Err.Description, vbCritical
+    WriteLog "Error: " & Err.Description
+End Sub
+
+
+
+
+
+
+
+
+
 
 
 
@@ -49,7 +231,9 @@ Sub TestLanguageDetection()
     Debug.Print "Detected: " & DetectLanguage(sample)
 End Sub
 
-
+Sub test()
+MsgBox "działa!"
+End Sub
 
 
 ' ----------------------
